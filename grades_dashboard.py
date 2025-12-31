@@ -232,9 +232,12 @@ def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, impro
     # Filter for valid differences
     valid_df = df[df['Difference'].notna()].copy()
 
+    # Only show actual improvements or degradations
     if improvements:
+        valid_df = valid_df[valid_df['Difference'] > 0]  # Only positive changes
         sorted_df = valid_df.nlargest(top_n, 'Difference')
     else:
+        valid_df = valid_df[valid_df['Difference'] < 0]  # Only negative changes
         sorted_df = valid_df.nsmallest(top_n, 'Difference')
 
     if len(sorted_df) == 0:
