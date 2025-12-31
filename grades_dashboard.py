@@ -197,6 +197,10 @@ def create_summary_metrics(df, oct_col, dec_col):
     """Create summary metrics for the dashboard."""
     total = len(df)
 
+    # Ensure Difference is numeric
+    df = df.copy()
+    df['Difference'] = pd.to_numeric(df['Difference'], errors='coerce')
+
     # Count by evolution
     improved = len(df[df['Difference'] > 0])
     degraded = len(df[df['Difference'] < 0])
@@ -229,16 +233,24 @@ def create_summary_metrics(df, oct_col, dec_col):
 
 def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, improvements=True):
     """Create comparison bar chart showing Oct vs Dec ratings."""
+    # Make a copy and ensure Difference is numeric
+    valid_df = df.copy()
+    valid_df['Difference'] = pd.to_numeric(valid_df['Difference'], errors='coerce')
+
     # Filter for valid differences
-    valid_df = df[df['Difference'].notna()].copy()
+    valid_df = valid_df[valid_df['Difference'].notna()]
 
     # Only show actual improvements or degradations
     if improvements:
         valid_df = valid_df[valid_df['Difference'] > 0]  # Only positive changes
-        sorted_df = valid_df.nlargest(top_n, 'Difference')
+        if len(valid_df) == 0:
+            return None
+        sorted_df = valid_df.nlargest(min(top_n, len(valid_df)), 'Difference')
     else:
         valid_df = valid_df[valid_df['Difference'] < 0]  # Only negative changes
-        sorted_df = valid_df.nsmallest(top_n, 'Difference')
+        if len(valid_df) == 0:
+            return None
+        sorted_df = valid_df.nsmallest(min(top_n, len(valid_df)), 'Difference')
 
     if len(sorted_df) == 0:
         return None
