@@ -479,7 +479,24 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.title("Filters")
 
-    search_term = st.sidebar.text_input("🔍 Search apartment name")
+    # Get list of all apartments for multi-select
+    all_apartments = sorted(df['Nom'].dropna().unique().tolist())
+
+    # Apartment selection
+    st.sidebar.subheader("Select Apartments")
+    select_all = st.sidebar.checkbox("Select All Apartments", value=True)
+
+    if select_all:
+        selected_apartments = all_apartments
+    else:
+        selected_apartments = st.sidebar.multiselect(
+            "Choose apartments to display",
+            options=all_apartments,
+            default=[],
+            help="Select one or more apartments"
+        )
+
+    search_term = st.sidebar.text_input("🔍 Search within selection")
     show_only = st.sidebar.selectbox(
         "Show only",
         ["All", "Improvements", "Degradations", "Stable", "New Ratings"]
@@ -490,7 +507,16 @@ def main():
     show_top_n = st.sidebar.slider("Number of apartments in Top Changes", min_value=5, max_value=100, value=10, step=5)
 
     # Apply filters
-    filtered_df = filter_dataframe(df, search_term, show_only)
+    filtered_df = df.copy()
+
+    # Filter by selected apartments
+    if not select_all and len(selected_apartments) > 0:
+        filtered_df = filtered_df[filtered_df['Nom'].isin(selected_apartments)]
+    elif not select_all and len(selected_apartments) == 0:
+        filtered_df = filtered_df.head(0)  # Empty dataframe
+
+    # Apply additional filters
+    filtered_df = filter_dataframe(filtered_df, search_term, show_only)
 
     # Summary metrics
     metrics = create_summary_metrics(filtered_df, oct_col, dec_col)
