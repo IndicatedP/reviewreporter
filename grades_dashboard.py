@@ -207,6 +207,13 @@ def create_summary_metrics(df, oct_col, dec_col):
     with_oct = df[oct_col].notna().sum()
     with_dec = df[dec_col].notna().sum()
 
+    # Total points gained and lost
+    positive_diffs = df[df['Difference'] > 0]['Difference'].sum()
+    negative_diffs = df[df['Difference'] < 0]['Difference'].sum()
+    total_points_up = round(positive_diffs, 2) if pd.notna(positive_diffs) else 0
+    total_points_down = round(abs(negative_diffs), 2) if pd.notna(negative_diffs) else 0
+    net_change = round(total_points_up - total_points_down, 2)
+
     return {
         'total': total,
         'improved': improved,
@@ -214,7 +221,10 @@ def create_summary_metrics(df, oct_col, dec_col):
         'stable': stable,
         'new_ratings': new_ratings,
         'with_oct': with_oct,
-        'with_dec': with_dec
+        'with_dec': with_dec,
+        'total_points_up': total_points_up,
+        'total_points_down': total_points_down,
+        'net_change': net_change
     }
 
 def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, improvements=True):
@@ -672,7 +682,11 @@ def main():
     # Summary metrics
     metrics = create_summary_metrics(filtered_df, oct_col, dec_col)
 
-    st.subheader(f"📊 {platform} Summary")
+    # Show manager name in header if filtered
+    if selected_manager != "All Managers":
+        st.subheader(f"📊 {platform} Summary - {selected_manager}")
+    else:
+        st.subheader(f"📊 {platform} Summary")
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -685,6 +699,17 @@ def main():
         st.metric("Stable", metrics['stable'])
     with col5:
         st.metric("New Ratings", metrics['new_ratings'])
+
+    # Performance metrics row
+    st.markdown("#### Performance Score")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Points Gained", f"+{metrics['total_points_up']}", delta=f"{metrics['improved']} apartments", delta_color="normal")
+    with col2:
+        st.metric("Total Points Lost", f"-{metrics['total_points_down']}", delta=f"{metrics['degraded']} apartments", delta_color="inverse")
+    with col3:
+        net = metrics['net_change']
+        st.metric("Net Change", f"{'+' if net >= 0 else ''}{net}", delta="Overall" if net >= 0 else "Needs attention", delta_color="normal" if net >= 0 else "inverse")
 
     st.markdown("---")
 
