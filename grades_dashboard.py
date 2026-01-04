@@ -218,6 +218,25 @@ def create_summary_metrics(df, oct_col, dec_col):
     total_points_down = round(abs(negative_diffs), 2) if pd.notna(negative_diffs) else 0
     net_change = round(total_points_up - total_points_down, 2)
 
+    # Comment statistics
+    comments_oct_col = 'Comments Oct'
+    comments_dec_col = 'Comments Dec'
+
+    # Convert comments to numeric (handle 'X' values)
+    if comments_oct_col in df.columns:
+        df[comments_oct_col] = pd.to_numeric(df[comments_oct_col], errors='coerce')
+        total_comments_oct = int(df[comments_oct_col].sum()) if df[comments_oct_col].notna().any() else 0
+    else:
+        total_comments_oct = 0
+
+    if comments_dec_col in df.columns:
+        df[comments_dec_col] = pd.to_numeric(df[comments_dec_col], errors='coerce')
+        total_comments_dec = int(df[comments_dec_col].sum()) if df[comments_dec_col].notna().any() else 0
+    else:
+        total_comments_dec = 0
+
+    new_comments = total_comments_dec - total_comments_oct
+
     return {
         'total': total,
         'improved': improved,
@@ -228,7 +247,10 @@ def create_summary_metrics(df, oct_col, dec_col):
         'with_dec': with_dec,
         'total_points_up': total_points_up,
         'total_points_down': total_points_down,
-        'net_change': net_change
+        'net_change': net_change,
+        'total_comments_oct': total_comments_oct,
+        'total_comments_dec': total_comments_dec,
+        'new_comments': new_comments
     }
 
 def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, improvements=True):
@@ -736,6 +758,19 @@ def main():
     with col3:
         net = metrics['net_change']
         st.metric("Net Change", f"{'+' if net >= 0 else ''}{net}", delta="Overall" if net >= 0 else "Needs attention", delta_color="normal" if net >= 0 else "inverse")
+
+    # Comments metrics row
+    st.markdown("#### Reviews / Comments")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Comments (October)", metrics['total_comments_oct'])
+    with col2:
+        st.metric("Comments (December)", metrics['total_comments_dec'])
+    with col3:
+        new_comments = metrics['new_comments']
+        st.metric("New Comments", f"{'+' if new_comments >= 0 else ''}{new_comments}",
+                  delta="Growth" if new_comments > 0 else ("No change" if new_comments == 0 else "Decrease"),
+                  delta_color="normal" if new_comments >= 0 else "inverse")
 
     st.markdown("---")
 
