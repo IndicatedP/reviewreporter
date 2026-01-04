@@ -487,13 +487,28 @@ def aggregate_by_apartment(df, oct_col, dec_col):
     # Extract base apartment number
     df['BaseApt'] = df['Ligne'].apply(extract_base_apartment_number)
 
-    # Group by base apartment number and aggregate
-    aggregated = df.groupby('BaseApt').agg({
+    # Convert comment columns to numeric
+    if 'Comments Oct' in df.columns:
+        df['Comments Oct'] = pd.to_numeric(df['Comments Oct'], errors='coerce')
+    if 'Comments Dec' in df.columns:
+        df['Comments Dec'] = pd.to_numeric(df['Comments Dec'], errors='coerce')
+
+    # Build aggregation dict
+    agg_dict = {
         'Nom': 'first',  # Take first name as representative
         oct_col: 'mean',
         dec_col: 'mean',
         'Ligne': lambda x: ', '.join(x.dropna().astype(str).unique())  # Combine all ligne values
-    }).reset_index()
+    }
+
+    # Add comment columns if they exist
+    if 'Comments Oct' in df.columns:
+        agg_dict['Comments Oct'] = 'sum'
+    if 'Comments Dec' in df.columns:
+        agg_dict['Comments Dec'] = 'sum'
+
+    # Group by base apartment number and aggregate
+    aggregated = df.groupby('BaseApt').agg(agg_dict).reset_index()
 
     # Recalculate difference and evolution
     aggregated['Difference'] = aggregated.apply(
