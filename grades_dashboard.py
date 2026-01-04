@@ -511,10 +511,9 @@ def aggregate_by_apartment(df, oct_col, dec_col):
     groupby_cols = ['BaseApt']
     if 'Platform' in df.columns:
         groupby_cols.append('Platform')
-        agg_dict['Platform'] = 'first'
 
     # Group by base apartment number (and platform if combined) and aggregate
-    aggregated = df.groupby(groupby_cols).agg(agg_dict).reset_index()
+    aggregated = df.groupby(groupby_cols, as_index=False).agg(agg_dict)
 
     # Recalculate difference and evolution
     aggregated['Difference'] = aggregated.apply(
