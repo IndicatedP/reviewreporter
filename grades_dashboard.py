@@ -29,20 +29,27 @@ def extract_booking_data_from_pdf(pdf_file):
             tables = page.extract_tables()
             for table in tables:
                 for row in table:
-                    if row and len(row) >= 6:
-                        # PDF structure: Ligne | Avantio (A/B) | Name | Link | Comments | Notes
-                        ligne_num = str(row[0]).strip() if row[0] else ''
-                        avantio = str(row[1]).strip() if row[1] else ''
-                        nom = str(row[2]).strip() if row[2] else ''
-                        # row[3] is link - skip it
-                        comments = str(row[4]).strip() if row[4] else '0'
-                        note = str(row[5]).strip() if row[5] else ''
-
-                        # Combine ligne with avantio letter if present (e.g., "2 A", "2 B")
-                        if avantio and avantio not in ['-', '', 'None', 'LIGNE sur Avantio']:
-                            ligne = f"{ligne_num} {avantio}"
+                    if row and len(row) >= 5:
+                        # Detect format based on column count
+                        if len(row) >= 6 and row[1] and str(row[1]).strip() in ['A', 'B', 'C', '-', 'LIGNE sur Avantio']:
+                            # New format (6+ cols): Ligne | Avantio (A/B) | Name | Link | Comments | Notes
+                            ligne_num = str(row[0]).strip() if row[0] else ''
+                            avantio = str(row[1]).strip() if row[1] else ''
+                            nom = str(row[2]).strip() if row[2] else ''
+                            comments = str(row[4]).strip() if row[4] else '0'
+                            note = str(row[5]).strip() if row[5] else ''
+                            # Combine ligne with avantio letter
+                            if avantio and avantio not in ['-', '', 'None', 'LIGNE sur Avantio']:
+                                ligne = f"{ligne_num} {avantio}"
+                            else:
+                                ligne = ligne_num
                         else:
-                            ligne = ligne_num
+                            # Old format (5 cols): Ligne | Name | Link | Comments | Notes
+                            ligne = str(row[0]).strip() if row[0] else ''
+                            ligne_num = ligne
+                            nom = str(row[1]).strip() if row[1] else ''
+                            comments = str(row[3]).strip() if row[3] else '0'
+                            note = str(row[4]).strip() if row[4] else ''
 
                         # Skip header rows
                         if ligne_num.lower() in ['ligne', 'line', '', 'tableau 1'] or nom.lower() in ['nom', 'name', 'noms', '']:
@@ -77,22 +84,32 @@ def extract_airbnb_data_from_pdf(pdf_file):
             for table in tables:
                 for row in table:
                     if row and len(row) >= 7:
-                        # PDF structure: Compte | Appartement | Ligne (A/B) | Nom | Liens | Comments | Note Global | ...
-                        apt_num = str(row[1]).strip() if row[1] else ''
-                        ligne_suffix = str(row[2]).strip() if row[2] else ''
-                        nom = str(row[3]).strip() if row[3] else ''
-                        # row[4] is link - skip it
-                        comments = str(row[5]).strip() if row[5] else '0'
-                        note = str(row[6]).strip() if row[6] else ''
+                        # Detect format per row: check if column 2 is a link (old format) or A/B/- (new format)
+                        col2 = str(row[2]).strip() if row[2] else ''
 
-                        # Combine apartment number with suffix if present (e.g., "2 A", "2 B")
-                        if ligne_suffix and ligne_suffix not in ['-', '', 'None', 'LIGNE']:
-                            ligne = f"{apt_num} {ligne_suffix}"
-                        else:
+                        if col2.startswith('http'):
+                            # Old format: Compte | Appartement | Link | Comments | Note Global | Note dernier | Dernier commentaire
+                            apt_num = str(row[1]).strip() if row[1] else ''
                             ligne = apt_num
+                            compte = str(row[0]).strip() if row[0] else ''
+                            nom = f"Apt {apt_num} ({compte[:15]})" if compte else f"Apartment {apt_num}"
+                            comments = str(row[3]).strip() if row[3] else '0'
+                            note = str(row[4]).strip() if row[4] else ''
+                        else:
+                            # New format: Compte | Appartement | Ligne (A/B) | Nom | Liens | Comments | Note Global
+                            apt_num = str(row[1]).strip() if row[1] else ''
+                            ligne_suffix = col2
+                            nom = str(row[3]).strip() if row[3] else ''
+                            comments = str(row[5]).strip() if row[5] else '0'
+                            note = str(row[6]).strip() if row[6] else ''
+                            # Combine apartment number with suffix
+                            if ligne_suffix and ligne_suffix not in ['-', '', 'None', 'LIGNE']:
+                                ligne = f"{apt_num} {ligne_suffix}"
+                            else:
+                                ligne = apt_num
 
                         # Skip header rows
-                        if apt_num.lower() in ['appartement', 'ligne', '', 'tableau 1'] or nom.lower() in ['nom', 'name', 'noms', '']:
+                        if apt_num.lower() in ['appartement', 'ligne', '', 'tableau 1'] or 'compte' in apt_num.lower():
                             continue
 
                         try:
@@ -105,7 +122,7 @@ def extract_airbnb_data_from_pdf(pdf_file):
                         except:
                             comments_val = 0
 
-                        if nom and nom != 'None':
+                        if nom and nom != 'None' and apt_num:
                             data.append({
                                 'Ligne': ligne,
                                 'Nom': nom,
@@ -116,18 +133,54 @@ def extract_airbnb_data_from_pdf(pdf_file):
 
 def create_comparison_df(df_before, df_after, before_label, after_label):
     """Create comparison dataframe from two period dataframes."""
-    # Merge on Nom (apartment name)
+    # Normalize name for matching (lowercase, strip whitespace, remove newlines)
+    def normalize_name(nom):
+        if pd.isna(nom):
+            return None
+        # Normalize: lowercase, remove newlines, strip extra spaces
+        return re.sub(r'\s+', ' ', str(nom).lower().strip())
+
+    df_before = df_before.copy()
+    df_after = df_after.copy()
+    df_before['NormNom'] = df_before['Nom'].apply(normalize_name)
+    df_after['NormNom'] = df_after['Nom'].apply(normalize_name)
+
+    # Merge on normalized name (most consistent across file formats)
     merged = pd.merge(
-        df_before[['Ligne', 'Nom', 'Note', 'Comments']],
-        df_after[['Nom', 'Note', 'Comments']],
-        on='Nom',
+        df_before[['Ligne', 'NormNom', 'Nom', 'Note', 'Comments']],
+        df_after[['NormNom', 'Ligne', 'Nom', 'Note', 'Comments']],
+        on='NormNom',
         how='outer',
         suffixes=(f' {before_label}', f' {after_label}')
     )
 
-    # Fill missing Ligne from after df if needed
-    if 'Ligne' not in merged.columns:
-        merged['Ligne'] = ''
+    # Use the better name and ligne
+    nom_before = f'Nom {before_label}'
+    nom_after = f'Nom {after_label}'
+    ligne_before = f'Ligne {before_label}'
+    ligne_after = f'Ligne {after_label}'
+
+    def pick_best_name(row):
+        name_b = row.get(nom_before, '')
+        name_a = row.get(nom_after, '')
+        # Prefer non-"Apt X" names and newer format names
+        if pd.notna(name_a) and not str(name_a).startswith('Apt '):
+            return name_a
+        if pd.notna(name_b) and not str(name_b).startswith('Apt '):
+            return name_b
+        return name_a if pd.notna(name_a) else name_b
+
+    merged['Nom'] = merged.apply(pick_best_name, axis=1)
+
+    # Use the after Ligne if available (has A/B labels), else before
+    def pick_ligne(row):
+        ligne_a = row.get(ligne_after, '')
+        ligne_b = row.get(ligne_before, '')
+        if pd.notna(ligne_a) and ligne_a:
+            return ligne_a
+        return ligne_b if pd.notna(ligne_b) else ''
+
+    merged['Ligne'] = merged.apply(pick_ligne, axis=1)
 
     before_col = f'Note {before_label}'
     after_col = f'Note {after_label}'
