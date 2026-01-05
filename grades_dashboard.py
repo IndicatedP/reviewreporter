@@ -293,6 +293,43 @@ def get_evolution_color(evolution):
     else:
         return 'gray'
 
+def calculate_pct_possible(df, oct_col, dec_col, max_rating, min_rating=0):
+    """
+    Calculate percentage of possible improvement/degradation.
+
+    For improvements: % = gain / (max - starting) * 100
+    For degradations: % = loss / (starting - min) * 100
+
+    This normalizes performance so a +0.5 from 8.5→9.0 is valued fairly
+    compared to a +2.0 from 4.0→6.0
+    """
+    df = df.copy()
+
+    def calc_pct(row):
+        oct_val = row[oct_col]
+        diff = row['Difference']
+
+        if pd.isna(oct_val) or pd.isna(diff):
+            return None
+
+        if diff > 0:
+            # Improvement: what % of possible improvement was achieved?
+            possible = max_rating - oct_val
+            if possible <= 0:
+                return 100.0 if diff > 0 else 0.0  # Already at max
+            return round((diff / possible) * 100, 1)
+        elif diff < 0:
+            # Degradation: what % of possible drop occurred?
+            possible = oct_val - min_rating
+            if possible <= 0:
+                return -100.0 if diff < 0 else 0.0  # Already at min
+            return round((diff / possible) * 100, 1)  # Will be negative
+        else:
+            return 0.0  # Stable
+
+    df['Pct Possible'] = df.apply(calc_pct, axis=1)
+    return df
+
 def create_summary_metrics(df, oct_col, dec_col):
     """Create summary metrics for the dashboard."""
     total = len(df)
@@ -337,6 +374,26 @@ def create_summary_metrics(df, oct_col, dec_col):
 
     new_comments = total_comments_dec - total_comments_oct
 
+    # Calculate average Pct Possible if available
+    avg_pct_improved = None
+    avg_pct_degraded = None
+    avg_pct_overall = None
+
+    if 'Pct Possible' in df.columns:
+        pct_col = pd.to_numeric(df['Pct Possible'], errors='coerce')
+        improved_pcts = pct_col[df['Difference'] > 0]
+        degraded_pcts = pct_col[df['Difference'] < 0]
+
+        if len(improved_pcts) > 0:
+            avg_pct_improved = round(improved_pcts.mean(), 1)
+        if len(degraded_pcts) > 0:
+            avg_pct_degraded = round(degraded_pcts.mean(), 1)
+
+        # Overall average (excluding stable)
+        all_changes = pct_col[df['Difference'] != 0]
+        if len(all_changes) > 0:
+            avg_pct_overall = round(all_changes.mean(), 1)
+
     return {
         'total': total,
         'improved': improved,
@@ -350,29 +407,39 @@ def create_summary_metrics(df, oct_col, dec_col):
         'net_change': net_change,
         'total_comments_oct': total_comments_oct,
         'total_comments_dec': total_comments_dec,
-        'new_comments': new_comments
+        'new_comments': new_comments,
+        'avg_pct_improved': avg_pct_improved,
+        'avg_pct_degraded': avg_pct_degraded,
+        'avg_pct_overall': avg_pct_overall
     }
 
-def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, improvements=True):
+def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, improvements=True, use_pct=False):
     """Create comparison bar chart showing Oct vs Dec ratings."""
     # Make a copy and ensure Difference is numeric
     valid_df = df.copy()
     valid_df['Difference'] = pd.to_numeric(valid_df['Difference'], errors='coerce')
 
+    # Determine which column to use for ranking
+    rank_col = 'Pct Possible' if use_pct and 'Pct Possible' in valid_df.columns else 'Difference'
+    if rank_col == 'Pct Possible':
+        valid_df['Pct Possible'] = pd.to_numeric(valid_df['Pct Possible'], errors='coerce')
+
     # Filter for valid differences
     valid_df = valid_df[valid_df['Difference'].notna()]
+    if use_pct and 'Pct Possible' in valid_df.columns:
+        valid_df = valid_df[valid_df['Pct Possible'].notna()]
 
     # Only show actual improvements or degradations
     if improvements:
         valid_df = valid_df[valid_df['Difference'] > 0]  # Only positive changes
         if len(valid_df) == 0:
             return None
-        sorted_df = valid_df.nlargest(min(top_n, len(valid_df)), 'Difference')
+        sorted_df = valid_df.nlargest(min(top_n, len(valid_df)), rank_col)
     else:
         valid_df = valid_df[valid_df['Difference'] < 0]  # Only negative changes
         if len(valid_df) == 0:
             return None
-        sorted_df = valid_df.nsmallest(min(top_n, len(valid_df)), 'Difference')
+        sorted_df = valid_df.nsmallest(min(top_n, len(valid_df)), rank_col)
 
     if len(sorted_df) == 0:
         return None
@@ -380,19 +447,23 @@ def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, impro
     # Prepare data for grouped bar chart
     chart_data = []
     for _, row in sorted_df.iterrows():
+        pct_val = row.get('Pct Possible', None)
+        pct_str = f"{pct_val:.1f}%" if pd.notna(pct_val) else "N/A"
         chart_data.append({
             'Apartment': row['Nom'][:40] + '...' if len(row['Nom']) > 40 else row['Nom'],
             'Full Name': row['Nom'],
             'Period': 'October',
             'Rating': row[oct_col] if pd.notna(row[oct_col]) else 0,
-            'Difference': row['Difference']
+            'Difference': row['Difference'],
+            'Pct Possible': pct_val if pd.notna(pct_val) else 0
         })
         chart_data.append({
             'Apartment': row['Nom'][:40] + '...' if len(row['Nom']) > 40 else row['Nom'],
             'Full Name': row['Nom'],
             'Period': 'December',
             'Rating': row[dec_col] if pd.notna(row[dec_col]) else 0,
-            'Difference': row['Difference']
+            'Difference': row['Difference'],
+            'Pct Possible': pct_val if pd.notna(pct_val) else 0
         })
 
     chart_df = pd.DataFrame(chart_data)
@@ -410,7 +481,7 @@ def create_top_changes_chart_altair(df, oct_col, dec_col, title, top_n=10, impro
             range=['#888888', 'green' if improvements else 'red']
         )),
         yOffset='Period:N',
-        tooltip=['Full Name:N', 'Period:N', 'Rating:Q', 'Difference:Q']
+        tooltip=['Full Name:N', 'Period:N', 'Rating:Q', 'Difference:Q', alt.Tooltip('Pct Possible:Q', format='.1f', title='% of Possible')]
     ).properties(
         title=title,
         width=400,
@@ -970,6 +1041,11 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.title("Chart Options")
     show_top_n = st.sidebar.slider("Number of apartments in Top Changes", min_value=5, max_value=100, value=10, step=5)
+    use_pct_ranking = st.sidebar.checkbox(
+        "Rank by % of Possible (fair comparison)",
+        value=False,
+        help="Rank apartments by percentage of possible improvement rather than raw points"
+    )
 
     st.sidebar.markdown("---")
     st.sidebar.title("Data Options")
@@ -989,6 +1065,9 @@ def main():
         working_df = aggregate_by_apartment(working_df, oct_col, dec_col)
         # Update apartment list after aggregation
         all_apartments = sorted(working_df['Nom'].dropna().unique().tolist())
+
+    # Calculate % of Possible Improvement (fairness metric)
+    working_df = calculate_pct_possible(working_df, oct_col, dec_col, max_rating, min_rating=0)
 
     # Apply filters
     filtered_df = working_df.copy()
@@ -1038,6 +1117,31 @@ def main():
         net = metrics['net_change']
         st.metric("Net Change", f"{'+' if net >= 0 else ''}{net}", delta="Overall" if net >= 0 else "Needs attention", delta_color="normal" if net >= 0 else "inverse")
 
+    # Fairness-adjusted metrics row
+    st.markdown("#### Fairness-Adjusted Score (% of Possible)")
+    st.caption("Normalizes performance by starting grade: a +0.5 from 8.5→9.0 (33% of possible) is valued fairly vs +2.0 from 4.0→6.0 (33% of possible)")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        pct_up = metrics.get('avg_pct_improved')
+        if pct_up is not None:
+            st.metric("Avg % Improved", f"{pct_up}%", delta="of possible gain", delta_color="off")
+        else:
+            st.metric("Avg % Improved", "N/A")
+    with col2:
+        pct_down = metrics.get('avg_pct_degraded')
+        if pct_down is not None:
+            st.metric("Avg % Degraded", f"{pct_down}%", delta="of possible loss", delta_color="off")
+        else:
+            st.metric("Avg % Degraded", "N/A")
+    with col3:
+        pct_overall = metrics.get('avg_pct_overall')
+        if pct_overall is not None:
+            st.metric("Net % Score", f"{'+' if pct_overall >= 0 else ''}{pct_overall}%",
+                      delta="Fair comparison" if pct_overall >= 0 else "Needs attention",
+                      delta_color="normal" if pct_overall >= 0 else "inverse")
+        else:
+            st.metric("Net % Score", "N/A")
+
     # Comments metrics row
     st.markdown("#### Reviews / Comments")
     col1, col2, col3 = st.columns(3)
@@ -1059,19 +1163,22 @@ def main():
     with tab1:
         col1, col2 = st.columns(2)
 
+        # Dynamic titles based on ranking method
+        rank_method = "by % of Possible" if use_pct_ranking else "by Points"
+
         with col1:
-            chart = create_top_changes_chart_altair(filtered_df, oct_col, dec_col, f"Top {show_top_n} Improvements (Oct → Dec)", top_n=show_top_n, improvements=True)
+            chart = create_top_changes_chart_altair(filtered_df, oct_col, dec_col, f"Top {show_top_n} Improvements ({rank_method})", top_n=show_top_n, improvements=True, use_pct=use_pct_ranking)
             if chart:
                 st.altair_chart(chart, use_container_width=True)
-                st.caption("Gray = October rating, Green = December rating")
+                st.caption("Gray = October rating, Green = December rating. Hover for details.")
             else:
                 st.info("No improvements to display")
 
         with col2:
-            chart = create_top_changes_chart_altair(filtered_df, oct_col, dec_col, f"Top {show_top_n} Degradations (Oct → Dec)", top_n=show_top_n, improvements=False)
+            chart = create_top_changes_chart_altair(filtered_df, oct_col, dec_col, f"Top {show_top_n} Degradations ({rank_method})", top_n=show_top_n, improvements=False, use_pct=use_pct_ranking)
             if chart:
                 st.altair_chart(chart, use_container_width=True)
-                st.caption("Gray = October rating, Red = December rating")
+                st.caption("Gray = October rating, Red = December rating. Hover for details.")
             else:
                 st.info("No degradations to display")
 
@@ -1159,6 +1266,7 @@ def main():
                 "Difference": st.column_config.NumberColumn("Change", format="%.2f"),
                 oct_col: st.column_config.NumberColumn(f"Oct Rating", format="%.1f"),
                 dec_col: st.column_config.NumberColumn(f"Dec Rating", format="%.1f"),
+                "Pct Possible": st.column_config.NumberColumn("% of Possible", format="%.1f%%", help="Percentage of possible improvement/degradation achieved"),
             }
         )
 
